@@ -28,7 +28,7 @@ class Trainer(object):
         return loss(logits, labels)
 
     def _train_batch(self, data, labels):
-        logits = self.model(data=data)
+        logits = self.model(x=data.x, edge_index=data.edge_index, batch=data.batch)
         loss = self.__loss__(logits, labels)
         self.optimizer.zero_grad()
         loss.backward()
@@ -38,7 +38,7 @@ class Trainer(object):
 
     def _eval_batch(self, data, labels):
         self.model.eval()
-        logits = self.model(data)
+        logits = self.model(x=data.x, edge_index=data.edge_index, batch=data.batch)
         loss = self.__loss__(logits, labels)
         loss = loss.item()
         preds = logits.argmax(-1)
