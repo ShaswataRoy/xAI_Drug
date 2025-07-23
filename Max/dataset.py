@@ -66,9 +66,9 @@ class Tox21Dataset(InMemoryDataset):
                 if labels[i,0] == 0:
                     continue
                 elif labels[i,0] == -1:
-                    data.y = torch.tensor([0], dtype=torch.float)
+                    data.y = torch.tensor([1,0], dtype=torch.float)
                 else:
-                    data.y = torch.tensor([1], dtype=torch.float)
+                    data.y = torch.tensor([0,1], dtype=torch.float)
             else:
                 data.y = torch.tensor(labels[i, :])
             data_list.append(data)
