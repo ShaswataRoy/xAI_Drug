@@ -162,7 +162,7 @@ class Tox21Dataset(InMemoryDataset):
     
         return data
 
-def random_split_dataset(dataset, frac_train=0.8, frac_val=0.1, frac_test=0.1, seed=0):
+def random_split_dataset(dataset, frac_train=0.8, frac_val=0.1, frac_test=0.1):
     """
     Splits dataset into training, validation and test set. If a task is specified it is isolated
     for all samples with NAN values discarded
@@ -176,7 +176,6 @@ def random_split_dataset(dataset, frac_train=0.8, frac_val=0.1, frac_test=0.1, s
     """
 
     num_mols = len(dataset)
-    random.seed(seed)
     all_idx = list(range(num_mols))
     random.shuffle(all_idx)
 
@@ -187,8 +186,8 @@ def random_split_dataset(dataset, frac_train=0.8, frac_val=0.1, frac_test=0.1, s
 
     assert len(train_idx) + len(val_idx) + len(test_idx) == num_mols
 
-    train_dataset = dataset[torch.tensor(train_idx)]
-    val_dataset = dataset[torch.tensor(val_idx)]
-    test_dataset = dataset[torch.tensor(test_idx)]
+    train_dataset = dataset[torch.tensor(train_idx)] if len(train_idx) > 0 else Data()
+    val_dataset = dataset[torch.tensor(val_idx)] if len(val_idx) > 0 else Data()
+    test_dataset = dataset[torch.tensor(test_idx)] if len(test_idx) > 0 else Data()
 
     return train_dataset, val_dataset, test_dataset

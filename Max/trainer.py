@@ -1,12 +1,13 @@
 import torch
 from torch.optim import Adam, SGD
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_auc_score, balanced_accuracy_score
 import matplotlib.pyplot as plt
 import os
 from IPython import display
 from IPython.display import clear_output
 import numpy as np
 import shutil
+from torch.optim.lr_scheduler import StepLR
 
 class Trainer(object):
 
@@ -14,7 +15,8 @@ class Trainer(object):
         self.model = model
         self.train_loader = train_loader  
         self.val_loader = val_loader
-        self.test_loader = test_loader
+        if test_loader != None:
+            self.test_loader = test_loader
         self.device = device
 
         self.optimizer = None
@@ -28,7 +30,7 @@ class Trainer(object):
         return loss(logits, labels)
 
     def _train_batch(self, data, labels):
-        logits = self.model(x=data.x, edge_index=data.edge_index, batch=data.batch)
+        logits = self.model(x=data.x, edge_index=data.edge_index, edge_attr=data.edge_attr, batch=data.batch)
         loss = self.__loss__(logits, labels)
         self.optimizer.zero_grad()
         loss.backward()
@@ -38,7 +40,7 @@ class Trainer(object):
 
     def _eval_batch(self, data, labels):
         self.model.eval()
-        logits = self.model(x=data.x, edge_index=data.edge_index, batch=data.batch)
+        logits = self.model(x=data.x, edge_index=data.edge_index, edge_attr=data.edge_attr, batch=data.batch)
         loss = self.__loss__(logits, labels)
         loss = loss.item()
         preds = logits.argmax(-1)
@@ -61,14 +63,17 @@ class Trainer(object):
             if i == 0:
                 labels = torch.tensor([[1,0] if yi==0 else [0,1] for yi in batch.y], dtype=torch.float)
                 pred_probs = probs.cpu().detach()
+                preds = batch_preds.cpu().detach()
             else:
                 labels = torch.cat([labels, torch.tensor([[1,0] if yi==0 else [0,1] for yi in batch.y], dtype=torch.float)])
                 pred_probs = torch.cat([pred_probs, probs.cpu().detach()])
+                preds = torch.cat([preds, batch_preds.cpu().detach()])
         eval_loss = torch.tensor(losses).mean().item()
         eval_acc = torch.cat(accs, dim=-1).float().mean().item()
         eval_auc = roc_auc_score(labels, pred_probs)
+        eval_bal_acc = balanced_accuracy_score(torch.argmax(labels,1).numpy(), preds.numpy())
 
-        return eval_loss, eval_acc, eval_auc
+        return eval_loss, eval_acc, eval_auc, eval_bal_acc
 
     def test(self):
         state_dict = torch.load(os.path.join(self.save_dir, f'{self.save_name}_best.pth'))['net']
@@ -100,14 +105,15 @@ class Trainer(object):
         test_loss = torch.tensor(losses).mean().item()
         test_acc = torch.cat(accs, dim=-1).float().mean().item()
         test_auc = roc_auc_score(labels, pred_probs)
+        test_bal_acc = balanced_accuracy_score(labels.numpy(), preds.numpy())
 
-        print(f"Test loss: {test_loss:.4f}, test acc {test_acc:.4f}, test_auc {test_auc:.4f}")
-        return test_loss, test_acc, test_auc, preds, pred_probs, labels
+        print(f"Test loss: {test_loss:.4f}, test acc {test_acc:.4f}, test_auc {test_auc:.4f}, test_bal_acc {test_bal_acc:.4f}")
+        return test_loss, test_acc, test_auc, test_bal_acc ,preds, pred_probs, labels
 
-    def train(self, train_params=None, optimizer_params=None):
+    def train(self, train_params=None, optimizer_params=None, verbose=True):
         num_epochs = train_params['num_epochs']
         num_early_stop = train_params['num_early_stop']
-        milestones = train_params['milestones']
+        scheduler_step = train_params['step']
         gamma = train_params['gamma']
 
         if optimizer_params is None:
@@ -115,20 +121,22 @@ class Trainer(object):
         else:
             self.optimizer = Adam(self.model.parameters(), **optimizer_params) #SGD(self.model.parameters(), **optimizer_params)
         
-        if milestones is not None and gamma is not None:
-            lr_schedule = MultiStepLR(self.optimizer,
-                                      milestones=milestones,
-                                      gamma=gamma)
+        if scheduler_step is not None and gamma is not None:
+            lr_schedule = StepLR(self.optimizer,
+                                 step_size=scheduler_step,
+                                 gamma=gamma)
         else:
             lr_schedule = None
 
         self.model.to(self.device)
         best_eval_acc = 0.0
         best_eval_auc = 0.0
+        best_eval_bal_acc = 0.0
         best_eval_loss = 10000.0
         early_stop_counter = 0
-
-        plot = LossPlot()
+        
+        if verbose:
+            plot = LossPlot()
         
         for epoch in range(num_epochs):
             is_best = False
@@ -141,8 +149,8 @@ class Trainer(object):
                 batch.y = batch.y.view(-1,2)
                 batch.y = torch.argmax(batch.y, 1)
 
-                loss, preds, logits = self._train_batch(batch, batch.y)
-                accs.append(preds == batch.y)
+                loss, batch_preds, logits = self._train_batch(batch, batch.y)
+                accs.append(batch_preds == batch.y)
                 losses.append(loss)
                 probs = torch.softmax(logits, 1)
                 probs = probs[:, 1]
@@ -150,17 +158,21 @@ class Trainer(object):
                 if i == 0:
                     labels = batch.y.cpu()
                     pred_probs = probs.cpu().detach()
+                    preds = batch_preds.cpu().detach()
                 else:
                     labels = torch.cat([labels, batch.y.cpu()])
                     pred_probs = torch.cat([pred_probs, probs.cpu().detach()])
+                    preds = torch.cat([preds, batch_preds.cpu().detach()])
 
             train_loss = torch.FloatTensor(losses).mean().item()
             train_acc = torch.cat(accs, dim=-1).float().mean().item()
             train_auc = roc_auc_score(labels, pred_probs)
-            eval_loss, eval_acc, eval_auc = self.eval_val_data()
-            plot.UpdatePlots(epoch, train_loss, eval_loss, train_acc, eval_acc, train_auc, eval_auc)
-            if epoch % 20 ==0:
-                print(f'Epoch:{epoch}, Training_loss:{train_loss:.4f}, Training_acc:{train_acc:.4f}, Training_auc:{train_auc:.4f}, Eval_loss:{eval_loss:.4f}, Eval_acc:{eval_acc:.4f}, Eval_auc:{eval_auc:.4f}')
+            train_bal_acc = balanced_accuracy_score(labels.numpy(), preds.numpy())
+            eval_loss, eval_acc, eval_auc, eval_bal_acc = self.eval_val_data()
+            if verbose:
+                plot.UpdatePlots(epoch, train_loss, eval_loss, train_acc, eval_acc, train_auc, eval_auc)
+            if epoch % 20 ==0 and verbose:
+                print(f'Epoch:{epoch}, Training_loss:{train_loss:.4f}, Training_acc:{train_acc:.4f}, Training_auc:{train_auc:.4f}, Training_bal_acc:{train_bal_acc:.4f}, Eval_loss:{eval_loss:.4f}, Eval_acc:{eval_acc:.4f}, Eval_auc:{eval_auc:.4f}, Eval_bal_acc:{eval_bal_acc:.4f}')
             if num_early_stop > 0:
                 if eval_loss <= best_eval_loss:
                     best_eval_loss = eval_loss
@@ -172,13 +184,19 @@ class Trainer(object):
             if lr_schedule:
                 lr_schedule.step()
 
-            if best_eval_auc < eval_auc:
+            if best_eval_bal_acc < eval_bal_acc:
                 is_best = True
+                best_eval_bal_acc = eval_bal_acc
+                best_eval_acc = eval_acc
                 best_eval_auc = eval_auc
             recording = {'epoch': epoch, 'is_best': str(is_best)}
             
             if self.save:
                 self.save_model(is_best, recording=recording)
+        
+        print(f'Best Model: Eval_acc:{best_eval_acc:.4f}, Eval_auc:{best_eval_auc:.4f}, Eval_bal_acc:{best_eval_bal_acc:.4f}')
+
+        return best_eval_acc, best_eval_auc, best_eval_bal_acc
 
     def save_model(self, is_best=False, recording=None):
         self.model.to('cpu')
