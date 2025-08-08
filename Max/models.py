@@ -6,7 +6,7 @@ from torch_geometric.nn import MessagePassing, global_mean_pool, global_max_pool
 
 class simpleGAT(torch.nn.Module):
     def __init__(self, in_channels, dim_h, out_channels, num_layers, dropout, heads=8):
-        super().__init__()
+        super(simpleGAT,self).__init__()
         self.conv1 = GATConv(in_channels, dim_h, heads=heads, dropout=dropout)
         # self.conv2 = GATConv(hidden_channels * heads, hidden_channels, heads=heads, dropout=dropout)
         # self.conv3 = GATConv(hidden_channels * heads, hidden_channels, heads=heads, dropout=dropout)
@@ -28,8 +28,10 @@ class simpleGAT(torch.nn.Module):
         # self.lin1 = Linear(hidden_channels * heads, 5*out_channels)
         # self.lin2 = Linear(5*out_channels, out_channels)
         
-    def forward(self, x, edge_index=None, edge_attr=None, batch=None, edge_weight=None):
-        #x, edge_index, batch = data.x, data.edge_index, data.batch
+    def forward(self, x=None, edge_index=None, edge_attr=None, batch=None, edge_weight=None, data=None):
+        if x is None:
+            x, edge_index, batch = data.x, data.edge_index, data.batch
+
         x = self.conv1(x, edge_index).relu()
 
         for layer in self.GAT_layers:
@@ -41,6 +43,14 @@ class simpleGAT(torch.nn.Module):
         graph_repr = global_mean_pool(x, batch)  # Aggregate node features to graph level
         # x = self.lin1(x).relu()
         return self.classifier(graph_repr)
+    
+    def get_emb(self, x, edge_index=None) -> torch.Tensor:
+        
+        post_conv = self.conv1(x, edge_index).relu()
+        for layer in self.GAT_layers:
+            post_conv = layer(post_conv, edge_index).relu()
+            
+        return post_conv
 
 class simpleGIN(torch.nn.Module):
     """GIN"""
@@ -107,6 +117,14 @@ class simpleGIN(torch.nn.Module):
         # h = F.dropout(h, p=self.dropout, training=self.training)
         
         # return self.lin2(h)
+
+    def get_emb(self, x, edge_index=None) -> torch.Tensor:
+        
+        post_conv = self.conv1(x, edge_index).relu()
+        for layer in self.GIN_layers:
+            post_conv = layer(post_conv, edge_index).relu()
+            
+        return post_conv
     
 class MPNNLayer(MessagePassing):
     def __init__(self, node_dim, edge_dim, hidden_dim):
